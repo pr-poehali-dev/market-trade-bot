@@ -1,5 +1,96 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Icon from "@/components/ui/icon";
+
+// ─── Binance API ──────────────────────────────────────────────────────────────
+
+const API_URL = "https://functions.poehali.dev/49fc3840-8388-42c6-8b18-4f3bb842fa44";
+
+interface TickerData {
+  symbol: string;
+  price: number;
+  change: number;
+  high: number;
+  low: number;
+  volume: number;
+  quoteVolume: number;
+}
+
+interface KlineData {
+  time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+function useTickers(refreshMs = 5000) {
+  const [tickers, setTickers] = useState<TickerData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState(false);
+
+  const fetchTickers = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}?type=ticker`);
+      const json = await res.json();
+      if (json.ok) {
+        setTickers(json.data);
+        setConnected(true);
+        setLoading(false);
+      }
+    } catch {
+      setConnected(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTickers();
+    const t = setInterval(fetchTickers, refreshMs);
+    return () => clearInterval(t);
+  }, [fetchTickers, refreshMs]);
+
+  return { tickers, loading, connected };
+}
+
+function useKlines(symbol: string, interval: string, limit = 60) {
+  const [candles, setCandles] = useState<KlineData[]>([]);
+  const [loading, setLoading] = useState(true);
+  const prevRef = useRef({ symbol, interval });
+
+  useEffect(() => {
+    setLoading(true);
+    const sym = symbol.replace("/", "");
+    fetch(`${API_URL}?type=klines&symbol=${sym}&interval=${interval}&limit=${limit}`)
+      .then(r => r.json())
+      .then(json => {
+        if (json.ok) setCandles(json.data);
+      })
+      .finally(() => setLoading(false));
+    prevRef.current = { symbol, interval };
+  }, [symbol, interval, limit]);
+
+  return { candles, loading };
+}
+
+function useDepth(symbol: string) {
+  const [bids, setBids] = useState<[number, number][]>([]);
+  const [asks, setAsks] = useState<[number, number][]>([]);
+
+  useEffect(() => {
+    const sym = symbol.replace("/", "");
+    const fetch_ = () =>
+      fetch(`${API_URL}?type=depth&symbol=${sym}`)
+        .then(r => r.json())
+        .then(json => {
+          if (json.ok) { setBids(json.bids); setAsks(json.asks); }
+        });
+    fetch_();
+    const t = setInterval(fetch_, 3000);
+    return () => clearInterval(t);
+  }, [symbol]);
+
+  return { bids, asks };
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -85,13 +176,24 @@ function genCandles(count = 60, basePrice = 43200): Candle[] {
   return candles;
 }
 
-const ASSETS: Asset[] = [
-  { symbol: "BTC/USDT", name: "Bitcoin", price: 43218.5, change: 2.34, pnl: 1842.5, pnlPct: 4.27, allocation: 35, status: "long", color: "#00e676" },
-  { symbol: "ETH/USDT", name: "Ethereum", price: 2641.2, change: -1.12, pnl: -234.8, pnlPct: -1.12, allocation: 22, status: "short", color: "#448aff" },
-  { symbol: "SOL/USDT", name: "Solana", price: 98.74, change: 5.87, pnl: 456.2, pnlPct: 5.87, allocation: 18, status: "long", color: "#e040fb" },
-  { symbol: "BNB/USDT", name: "Binance Coin", price: 312.45, change: 0.34, pnl: 128.9, pnlPct: 0.34, allocation: 15, status: "idle", color: "#ffd740" },
-  { symbol: "XRP/USDT", name: "Ripple", price: 0.6234, change: -0.87, pnl: -45.3, pnlPct: -0.87, allocation: 10, status: "short", color: "#ff6e40" },
+const BASE_ASSETS: Asset[] = [
+  { symbol: "BTC/USDT", name: "Bitcoin", price: 0, change: 0, pnl: 1842.5, pnlPct: 4.27, allocation: 35, status: "long", color: "#00e676" },
+  { symbol: "ETH/USDT", name: "Ethereum", price: 0, change: 0, pnl: -234.8, pnlPct: -1.12, allocation: 22, status: "short", color: "#448aff" },
+  { symbol: "SOL/USDT", name: "Solana", price: 0, change: 0, pnl: 456.2, pnlPct: 5.87, allocation: 18, status: "long", color: "#e040fb" },
+  { symbol: "BNB/USDT", name: "Binance Coin", price: 0, change: 0, pnl: 128.9, pnlPct: 0.34, allocation: 15, status: "idle", color: "#ffd740" },
+  { symbol: "XRP/USDT", name: "Ripple", price: 0, change: 0, pnl: -45.3, pnlPct: -0.87, allocation: 10, status: "short", color: "#ff6e40" },
 ];
+
+function mergeWithTickers(tickers: TickerData[]): Asset[] {
+  return BASE_ASSETS.map(a => {
+    const sym = a.symbol.replace("/", "");
+    const t = tickers.find(t => t.symbol === sym);
+    if (!t) return a;
+    return { ...a, price: t.price, change: t.change };
+  });
+}
+
+const ASSETS = BASE_ASSETS;
 
 const SIGNALS: Signal[] = [
   { id: 1, symbol: "BTC/USDT", type: "BUY", indicator: "RSI + MACD", strength: 87, price: 43218.5, time: "14:32", executed: true },
@@ -157,7 +259,23 @@ function Sparkline({ data, color, width = 80, height = 30 }: { data: number[]; c
 
 // ─── Candle Chart ─────────────────────────────────────────────────────────────
 
-function CandleChart({ candles, width = 640, height = 280 }: { candles: Candle[]; width?: number; height?: number }) {
+type AnyCandle = { open: number; high: number; low: number; close: number; volume: number; time?: string | number };
+
+function formatCandleTime(c: AnyCandle): string {
+  if (!c.time) return "";
+  if (typeof c.time === "number") {
+    const d = new Date(c.time);
+    return `${d.getHours()}:${d.getMinutes().toString().padStart(2, "0")}`;
+  }
+  return c.time as string;
+}
+
+function CandleChart({ candles, width = 640, height = 280 }: { candles: AnyCandle[]; width?: number; height?: number }) {
+  if (!candles.length) return (
+    <div className="flex items-center justify-center h-[280px] text-muted-foreground text-xs font-mono">
+      <div className="flex items-center gap-2"><div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />Загрузка данных...</div>
+    </div>
+  );
   const padding = { top: 12, right: 12, bottom: 28, left: 62 };
   const chartW = width - padding.left - padding.right;
   const chartH = height - padding.top - padding.bottom;
@@ -195,7 +313,7 @@ function CandleChart({ candles, width = 640, height = 280 }: { candles: Candle[]
       })}
       {candles.filter((_, i) => i % 10 === 0).map((c, idx) => (
         <text key={idx} x={toX(idx * 10)} y={height - 6} textAnchor="middle" fontSize="9" fill="hsl(215,15%,40%)" fontFamily="IBM Plex Mono">
-          {c.time}
+          {formatCandleTime(c)}
         </text>
       ))}
     </svg>
@@ -272,7 +390,10 @@ function StatCard({ label, value, sub, color, icon, delay = 0 }: {
 function Dashboard({ assets, signals }: { assets: Asset[]; signals: Signal[] }) {
   const totalPnl = assets.reduce((s, a) => s + a.pnl, 0);
   const winSignals = signals.filter(s => s.executed).length;
-  const [candles] = useState(() => genCandles(50, 43000));
+  const { candles, loading: candlesLoading } = useKlines("BTCUSDT", "15m", 60);
+  const btc = assets.find(a => a.symbol === "BTC/USDT");
+  const btcPrice = btc?.price || 0;
+  const btcChange = btc?.change || 0;
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -289,11 +410,18 @@ function Dashboard({ assets, signals }: { assets: Asset[]; signals: Signal[] }) 
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-[#00e676] animate-pulse-neon" />
               <span className="text-sm font-semibold">BTC/USDT</span>
-              <span className="text-xs text-muted-foreground font-mono">15m</span>
+              <span className="text-xs text-muted-foreground font-mono">15m · Binance</span>
+              {candlesLoading && <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin text-muted-foreground" />}
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-lg font-bold font-mono" style={{ color: "#00e676" }}>$43,218.50</span>
-              <span className="text-xs px-2 py-0.5 rounded font-mono" style={{ color: "#00e676", background: "#00e67618" }}>+2.34%</span>
+              <span className="text-lg font-bold font-mono" style={{ color: "#00e676" }}>
+                {btcPrice > 0 ? `$${btcPrice.toLocaleString("en", { maximumFractionDigits: 2 })}` : "—"}
+              </span>
+              {btcPrice > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded font-mono" style={{ color: btcChange >= 0 ? "#00e676" : "#ff5252", background: btcChange >= 0 ? "#00e67618" : "#ff525218" }}>
+                  {btcChange >= 0 ? "+" : ""}{btcChange.toFixed(2)}%
+                </span>
+              )}
             </div>
           </div>
           <CandleChart candles={candles} />
@@ -377,24 +505,58 @@ function Dashboard({ assets, signals }: { assets: Asset[]; signals: Signal[] }) 
 
 // ─── Charts ───────────────────────────────────────────────────────────────────
 
-function Charts() {
+function Charts({ assets }: { assets: Asset[] }) {
   const [activeAsset, setActiveAsset] = useState("BTC/USDT");
   const [timeframe, setTimeframe] = useState("15m");
   const [activeInds, setActiveInds] = useState<string[]>(["RSI", "MACD"]);
   const assetConfs = [
-    { symbol: "BTC/USDT", base: 43200, color: "#00e676" },
-    { symbol: "ETH/USDT", base: 2640, color: "#448aff" },
-    { symbol: "SOL/USDT", base: 98, color: "#e040fb" },
-    { symbol: "BNB/USDT", base: 312, color: "#ffd740" },
+    { symbol: "BTC/USDT", color: "#00e676" },
+    { symbol: "ETH/USDT", color: "#448aff" },
+    { symbol: "SOL/USDT", color: "#e040fb" },
+    { symbol: "BNB/USDT", color: "#ffd740" },
   ];
   const conf = assetConfs.find(a => a.symbol === activeAsset) || assetConfs[0];
-  const [candles] = useState(() => genCandles(60, conf.base));
+  const binanceSym = activeAsset.replace("/", "");
+  const { candles, loading: kloading } = useKlines(binanceSym, timeframe, 60);
   const tfs = ["1m", "5m", "15m", "1h", "4h", "1d"];
-  const indicators = ["RSI", "MACD", "EMA", "BB", "VWAP", "Stoch"];
+  const indicators = ["RSI", "MACD"];
   const toggleInd = (ind: string) => setActiveInds(p => p.includes(ind) ? p.filter(i => i !== ind) : [...p, ind]);
-  const rsiData = Array.from({ length: 60 }, (_, i) => 30 + Math.random() * 40 + Math.sin(i / 5) * 10);
-  const macdData = Array.from({ length: 60 }, (_, i) => (Math.random() - 0.5) * 200 + Math.sin(i / 8) * 100);
   const last = candles[candles.length - 1];
+
+  // RSI вычисляем из реальных цен закрытия
+  const rsiData = (() => {
+    if (candles.length < 15) return Array.from({ length: 60 }, (_, i) => 30 + Math.sin(i / 5) * 20 + 30);
+    const closes = candles.map(c => c.close);
+    const period = 14;
+    const rsis: number[] = [];
+    for (let i = period; i < closes.length; i++) {
+      let gains = 0, losses = 0;
+      for (let j = i - period; j < i; j++) {
+        const diff = closes[j + 1] - closes[j];
+        if (diff > 0) gains += diff; else losses -= diff;
+      }
+      const rs = losses === 0 ? 100 : gains / losses;
+      rsis.push(100 - 100 / (1 + rs));
+    }
+    return rsis;
+  })();
+
+  const macdData = (() => {
+    if (candles.length < 30) return Array.from({ length: 60 }, (_, i) => (Math.random() - 0.5) * 200);
+    const closes = candles.map(c => c.close);
+    const ema = (data: number[], p: number) => {
+      const k = 2 / (p + 1);
+      return data.reduce((acc: number[], v, i) => {
+        acc.push(i === 0 ? v : v * k + acc[i - 1] * (1 - k));
+        return acc;
+      }, []);
+    };
+    const ema12 = ema(closes, 12);
+    const ema26 = ema(closes, 26);
+    return ema12.map((v, i) => v - ema26[i]);
+  })();
+
+  const activeTicker = assets.find(a => a.symbol === activeAsset);
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -431,7 +593,13 @@ function Charts() {
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full animate-pulse-neon" style={{ background: conf.color }} />
             <span className="text-sm font-semibold">{activeAsset}</span>
-            <span className="text-xs text-muted-foreground">{timeframe}</span>
+            <span className="text-xs text-muted-foreground">{timeframe} · Binance</span>
+            {kloading && <div className="w-3 h-3 border border-muted-foreground border-t-transparent rounded-full animate-spin" />}
+            {activeTicker && (
+              <span className="text-xs font-mono ml-2" style={{ color: activeTicker.change >= 0 ? "#00e676" : "#ff5252" }}>
+                {activeTicker.change >= 0 ? "+" : ""}{activeTicker.change.toFixed(2)}%
+              </span>
+            )}
           </div>
           {last && (
             <div className="flex gap-4 text-xs font-mono">
@@ -870,6 +1038,8 @@ export default function Index() {
   const [section, setSection] = useState<NavSection>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
   const [time, setTime] = useState(new Date());
+  const { tickers, connected } = useTickers(5000);
+  const liveAssets = tickers.length > 0 ? mergeWithTickers(tickers) : ASSETS;
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
@@ -891,9 +1061,9 @@ export default function Index() {
           {!collapsed && (
             <div>
               <div className="text-sm font-bold leading-tight">TradeBot</div>
-              <div className="text-[10px] font-mono flex items-center gap-1" style={{ color: "#00e676" }}>
-                <span className="w-1.5 h-1.5 rounded-full inline-block animate-pulse-neon" style={{ background: "#00e676" }} />
-                АКТИВЕН
+              <div className="text-[10px] font-mono flex items-center gap-1" style={{ color: connected ? "#00e676" : "#ffd740" }}>
+                <span className="w-1.5 h-1.5 rounded-full inline-block animate-pulse-neon" style={{ background: connected ? "#00e676" : "#ffd740" }} />
+                {connected ? "АКТИВЕН" : "ПОДКЛЮЧЕНИЕ…"}
               </div>
             </div>
           )}
@@ -925,7 +1095,6 @@ export default function Index() {
         <div className="p-2 border-t border-border">
           <button onClick={() => setCollapsed(v => !v)}
             className="w-full flex items-center justify-center py-2 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
-            style={{ background: "" }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "hsl(220,16%,13%)" }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "" }}>
             <Icon name={collapsed ? "ChevronRight" : "ChevronLeft"} size={13} />
@@ -935,7 +1104,7 @@ export default function Index() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <TickerBar assets={ASSETS} />
+        <TickerBar assets={liveAssets} />
 
         {/* Header */}
         <header className="flex items-center justify-between px-5 h-11 border-b border-border flex-shrink-0" style={{ background: "hsla(220,16%,9%,0.8)" }}>
@@ -943,12 +1112,12 @@ export default function Index() {
           <div className="flex items-center gap-5 text-xs font-mono">
             <span className="text-muted-foreground">{time.toLocaleTimeString("ru-RU")}</span>
             <div className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full animate-pulse-neon" style={{ background: "#00e676" }} />
-              <span style={{ color: "#00e676" }}>Биржа онлайн</span>
+              <div className="w-1.5 h-1.5 rounded-full animate-pulse-neon" style={{ background: connected ? "#00e676" : "#ffd740" }} />
+              <span style={{ color: connected ? "#00e676" : "#ffd740" }}>{connected ? "Binance онлайн" : "Подключение…"}</span>
             </div>
             <div className="flex items-center gap-1.5 text-muted-foreground">
-              <Icon name="Cpu" size={10} />
-              <span>CPU 12%</span>
+              <Icon name="RefreshCw" size={10} />
+              <span>обновл. 5с</span>
             </div>
           </div>
         </header>
@@ -956,9 +1125,9 @@ export default function Index() {
         {/* Content */}
         <main className="flex-1 overflow-y-auto p-4">
           <div className="max-w-6xl mx-auto">
-            {section === "dashboard" && <Dashboard assets={ASSETS} signals={SIGNALS} />}
-            {section === "charts" && <Charts />}
-            {section === "portfolio" && <Portfolio assets={ASSETS} />}
+            {section === "dashboard" && <Dashboard assets={liveAssets} signals={SIGNALS} />}
+            {section === "charts" && <Charts assets={liveAssets} />}
+            {section === "portfolio" && <Portfolio assets={liveAssets} />}
             {section === "history" && <History trades={TRADES} />}
             {section === "analytics" && <Analytics trades={TRADES} />}
             {section === "logs" && <Logs logs={LOGS} />}

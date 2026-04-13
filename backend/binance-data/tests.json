@@ -1,0 +1,28 @@
+{
+  "tests": [
+    {
+      "name": "Ticker 24h для всех активов",
+      "method": "GET",
+      "path": "/?type=ticker",
+      "expectedStatus": 200,
+      "expectedBody": {"ok": true},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Свечи BTC 15m",
+      "method": "GET",
+      "path": "/?type=klines&symbol=BTCUSDT&interval=15m&limit=10",
+      "expectedStatus": 200,
+      "expectedBody": {"ok": true},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Стакан ETH",
+      "method": "GET",
+      "path": "/?type=depth&symbol=ETHUSDT",
+      "expectedStatus": 200,
+      "expectedBody": {"ok": true},
+      "bodyMatcher": "partial"
+    }
+  ]
+}
